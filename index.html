@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>e Smart Tag Camera | 教師用</title>
+  <style>
+    :root{ --bg:#f7f8fb; --panel:#ffffff; --muted:#6b7280; --text:#111827; --brand:#2563eb; --ok:#059669; --warn:#d97706; --bad:#dc2626; --shadow:0 10px 30px rgba(0,0,0,.08); --radius:16px; }
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans JP,Helvetica,Arial;background:var(--bg);color:var(--text)}
+    header{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:12px;padding:14px 20px;background:rgba(255,255,255,.85);border-bottom:1px solid rgba(0,0,0,.06)}
+    .logo small{display:block;font-weight:500;color:var(--muted)}
+    .uptime{margin-left:auto;display:flex;align-items:center;gap:10px;font-variant-numeric:tabular-nums;font-weight:600;padding:8px 12px;border-radius:999px;background:#fff;box-shadow:var(--shadow);border:1px solid rgba(0,0,0,.06)}
+    .uptime .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+    main{max-width:1200px;margin:24px auto;padding:0 20px 40px}
+    .tabs{display:flex;gap:12px;margin-bottom:20px}
+    .tab-btn{border:none;border-radius:999px;padding:10px 16px;cursor:pointer;color:var(--text);background:#eef2f7}
+    .tab-btn[aria-selected="true"]{background:#dbeafe}
+    .panel{background:var(--panel);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);border:1px solid rgba(0,0,0,.06)}
+    .grid{display:grid;gap:16px}
+    @media(min-width:900px){.cols-2{grid-template-columns:1.2fr .8fr}}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .field{display:flex;flex-direction:column;gap:8px}
+    .field label{font-size:.92rem;color:#374151}
+    .input, select, textarea{background:#fff;color:var(--text);border:1px solid rgba(0,0,0,.08);border-radius:12px;padding:10px 12px;outline:none}
+    .input:focus, select:focus, textarea:focus{border-color:var(--brand)}
+    textarea{min-height:90px;resize:vertical}
+    .btn{display:inline-flex;align-items:center;gap:6px;border:none;border-radius:12px;padding:8px 12px;cursor:pointer;background:#2563eb;color:#fff;font-weight:600;font-size:.9rem}
+    .btn.secondary{background:#e5e7eb;color:#111827}
+    .status{padding:4px 8px;border-radius:999px;font-weight:700;font-size:.8rem}
+    .s-ok{background:#dcfce7;color:#166534}
+    .s-warn{background:#fef9c3;color:#92400e}
+    .s-bad{background:#fee2e2;color:#991b1b}
+    .thumbs img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid rgba(0,0,0,.06)}
+    .table{width:100%;border-collapse:separate;border-spacing:0 10px}
+    .table th{font-size:.88rem;color:#6b7280;text-align:left;padding:0 10px}
+    .table td{background:#fff;border:1px solid rgba(0,0,0,.06);padding:10px;vertical-align:top}
+    .meta{display:flex;flex-wrap:wrap;gap:10px;color:#374151;font-size:.9rem}
+    .toast{position:fixed;right:18px;bottom:18px;background:#111827;color:#fff;border:1px solid rgba(255,255,255,.1);padding:12px 14px;border-radius:12px;box-shadow:var(--shadow);opacity:0;transform:translateY(12px);pointer-events:none;transition:.25s}
+    .toast.show{opacity:1;transform:translateY(0)}
+    /* 追加: レイアウト統一用 */
+    .actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;min-width:260px}
+    .row-split{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+    .notes{flex:1 1 auto;min-width:220px}
+    .actions .btn{white-space:nowrap}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">e Smart Tag Camera <span style="color:#6b7280">— 教師用</span><small>管理画面</small></div>
+    <div class="uptime"><div class="dot"></div><span id="uptime">00:00:00</span></div>
+  </header>
+  <main>
+    <nav class="tabs">
+      <button id="tabBtnSetup" class="tab-btn" aria-selected="true">課題設定</button>
+      <button id="tabBtnReview" class="tab-btn" aria-selected="false">提出確認</button>
+      <button id="tabBtnAccount" class="tab-btn" aria-selected="false">アカウント</button>
+    </nav>
+    <div id="root"></div>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite">保存しました</div>
+
+  <!-- React / Babel (CDN) -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+
+  <!-- App -->
+  <script type="text/babel" data-presets="env,react">
+    const {useState,useEffect,useMemo} = React;
+
+    // --- Safe UUID ---
+    const UUID = () => (window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now() + '-' + Math.random().toString(36).slice(2));
+
+    const SUBJECTS=['国語','算数','英語','社会','理科','地理'];
+    const EVALS=['AI採点','人力採点','AI提出確認','人力提出確認'];
+
+    // ---- Worktime (per-month) in localStorage ----
+    const monthKey = ()=>{
+      const d = new Date();
+      return `workMS:${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    };
+    const getWorkMS = ()=> Number(localStorage.getItem(monthKey())||0);
+    const addWorkMS = (ms)=> localStorage.setItem(monthKey(), String(getWorkMS()+ms));
+    // accumulate every 30s only when tab is visible
+    setInterval(()=>{ if(document.visibilityState==='visible') addWorkMS(30000); }, 30000);
+
+    // toast
+    const toast=(msg='保存しました')=>{const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),1500)};
+    // uptime (session)
+    (function(){const s=Date.now(),e=document.getElementById('uptime');setInterval(()=>{const d=Math.floor((Date.now()-s)/1000);const h=String(Math.floor(d/3600)).padStart(2,'0');const m=String(Math.floor((d%3600)/60)).padStart(2,'0');const ss=String(d%60).padStart(2,'0');e.textContent=`${h}:${m}:${ss}`},1000)})();
+
+    const TextField=({label,...props})=> (<div className="field"><label>{label}</label><input className="input" {...props}/></div>);
+    const SelectField=({label,options,...props})=> (<div className="field"><label>{label}</label><select {...props}>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></div>);
+
+    function PhotoTaskForm({onCreate}){
+      const [deadline,setDeadline]=useState('');
+      const [subject,setSubject]=useState(SUBJECTS[0]);
+      const [title,setTitle]=useState('');
+      const [evalp,setEvalp]=useState(EVALS[0]);
+      const submit=e=>{e.preventDefault();onCreate({type:'photo',deadline,subject,title,eval:evalp});setDeadline('');setSubject(SUBJECTS[0]);setTitle('');setEvalp(EVALS[0]);toast('写真課題を登録しました')};
+      return (
+        <div className="grid cols-2">
+          <form className="grid" onSubmit={submit}>
+            <div className="row">
+              <TextField label="締め切り（分まで）" type="datetime-local" required value={deadline} onChange={e=>setDeadline(e.target.value)}/>
+              <SelectField label="科目" value={subject} onChange={e=>setSubject(e.target.value)} options={SUBJECTS}/>
+            </div>
+            <TextField label="課題名" required placeholder="例：理科ノートP32 光の反射（板書写真）" value={title} onChange={e=>setTitle(e.target.value)}/>
+            <SelectField label="評価パターン" value={evalp} onChange={e=>setEvalp(e.target.value)} options={EVALS}/>
+            <div className="row">
+              <button className="btn" type="submit">＋ 写真課題を登録</button>
+              <button className="btn secondary" type="button" onClick={()=>{setDeadline('');setSubject(SUBJECTS[0]);setTitle('');setEvalp(EVALS[0]);}}>リセット</button>
+            </div>
+          </form>
+          <aside className="panel" style={{borderStyle:'dashed'}}>写真提出課題の概要・注意点など</aside>
+        </div>
+      );
+    }
+
+    function InputTaskForm({onCreate}){
+      const [deadline,setDeadline]=useState('');
+      const [subject,setSubject]=useState(SUBJECTS[0]);
+      const [title,setTitle]=useState('');
+      const [evalp,setEvalp]=useState(EVALS[0]);
+      const [problems,setProblems]=useState([{q:'例：0.5+0.25=',ans:''}]);
+      const addProblem=()=>setProblems(p=>[...p,{q:'新しい問題',ans:''}]);
+      const clearProblems=()=>setProblems([]);
+      const change=(i,patch)=>setProblems(p=>p.map((it,idx)=>idx===i?{...it,...patch}:it));
+      const remove=(i)=>setProblems(p=>p.filter((_,idx)=>idx!==i));
+      const submit=e=>{e.preventDefault();onCreate({type:'input',deadline,subject,title,eval:evalp,problems});setDeadline('');setSubject(SUBJECTS[0]);setTitle('');setEvalp(EVALS[0]);setProblems([{q:'例：0.5+0.25=',ans:''}]);toast('入力課題を登録しました')};
+      return (
+        <div className="grid cols-2">
+          <form className="grid" onSubmit={submit}>
+            <div className="row">
+              <TextField label="締め切り（分まで）" type="datetime-local" required value={deadline} onChange={e=>setDeadline(e.target.value)}/>
+              <SelectField label="科目" value={subject} onChange={e=>setSubject(e.target.value)} options={SUBJECTS}/>
+            </div>
+            <TextField label="課題名" required placeholder="例：算数 小数の筆算 小テスト" value={title} onChange={e=>setTitle(e.target.value)}/>
+            <div className="field">
+              <label>問題（自由に追加/削除）</label>
+              <div className="grid" style={{gap:12}}>
+                {problems.map((p,i)=>(
+                  <div key={i} className="panel" style={{padding:12}}>
+                    <div className="row">
+                      <input className="input" value={p.q} onChange={e=>change(i,{q:e.target.value})} placeholder="問題文"/>
+                      <button className="btn secondary" type="button" onClick={()=>remove(i)}>削除</button>
+                    </div>
+                    <div style={{marginTop:8}}>
+                      <textarea className="input" placeholder="答案（任意／書いても描かなくてもOK）" value={p.ans} onChange={e=>change(i,{ans:e.target.value})}></textarea>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="row" style={{marginTop:8}}>
+                <button type="button" className="btn" onClick={addProblem}>＋ 問題を追加</button>
+                <button type="button" className="btn secondary" onClick={clearProblems}>全削除</button>
+              </div>
+            </div>
+            <SelectField label="評価パターン" value={evalp} onChange={e=>setEvalp(e.target.value)} options={EVALS}/>
+            <p style={{color:'#1d4ed8',marginTop:-4}}>AI採点では、惜しい回答に部分点を付与したり、文章題の合否を自動判定できます（後から上書き可能）。</p>
+            <div className="row">
+              <button className="btn" type="submit">＋ 入力課題を登録</button>
+              <button className="btn secondary" type="button" onClick={()=>{setDeadline('');setSubject(SUBJECTS[0]);setTitle('');setEvalp(EVALS[0]);setProblems([{q:'例：0.5+0.25=',ans:''}]);}}>リセット</button>
+            </div>
+          </form>
+          <aside className="panel" style={{borderStyle:'dashed'}}>入力課題の説明など</aside>
+        </div>
+      );
+    }
+
+    function Review({items}){
+      const fmt=d=>new Date(d).toLocaleString('ja-JP',{hour12:false});
+      const students=['山田','佐藤','鈴木','田中','伊藤','高橋'];
+      const [overrides,setOverrides]=useState({});
+
+      const setManual=(ass,i)=>{
+        const scoreStr = prompt('手動採点：点数を入力してください（0-100）','80');
+        if(scoreStr===null) return;
+        const score = Number(scoreStr);
+        const note = prompt('メモ（任意）','手動採点');
+        setOverrides(o=>({...o,[`${ass.id}-${i}`]:{status:'採点済',cls:'s-ok',score: isNaN(score)?'-':score,notes: note||'手動採点'}}));
+        toast('手動採点を保存しました');
+      };
+
+      const downloadImage=(src)=>{fetch(src).then(r=>r.blob()).then(b=>{const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download=src.split('/').pop()||'submission.png';document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);}).catch(()=>toast('画像の取得に失敗しました'))};
+
+      return (
+        <div className="grid" style={{gap:16}}>
+          {items.slice().sort((a,b)=>new Date(a.deadline)-new Date(b.deadline)).map(ass=> {
+            // 一斉送信（このモックでは 3人に1人が未提出）
+            const unsubmittedCount = students.filter((_,i)=> i%3===0).length;
+            const bulkSend=()=> toast(`未提出者(${unsubmittedCount}名)に送信しました`);
+            return (
+            <article key={ass.id} className="panel">
+              <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
+                <div>
+                  <h4 style={{margin:'0 0 6px'}}>{ass.title}</h4>
+                  <div className="meta">
+                    <span>提出形式：{ass.type==='photo'?'写真':'入力'}</span>
+                    <span>科目：{ass.subject}</span>
+                    <span>締め切り：{fmt(ass.deadline)}</span>
+                    <span>評価：{ass.eval}</span>
+                  </div>
+                </div>
+                <div className="actions">
+                  <button className="btn" onClick={bulkSend}>未提出者に一斉送信</button>
+                </div>
+              </div>
+
+              <div style={{marginTop:10}}>
+                <table className="table" aria-label="提出一覧">
+                  <thead><tr><th>生徒</th><th>ステータス</th><th>得点</th><th>メモ/サンプル</th></tr></thead>
+                  <tbody>
+                    {students.map((name,i)=>{
+                      const key = `${ass.id}-${i}`;
+                      const ov = overrides[key];
+                      let status={label:'未提出',cls:'s-bad'};let score='-';let notes='';
+                      if(i%3!==0){
+                        if(ass.eval==='AI提出確認'){status={label:i%2?'自動確認OK':'認識不可能',cls:i%2?'s-ok':'s-warn'};notes=i%2?'鮮明/枠内':'再提出推奨'}
+                        else if(ass.eval==='人力提出確認'){status={label:'要目視',cls:'s-warn'};notes='確認待ち'}
+                        else if(ass.eval==='AI採点'){const base=60+(i*7)%41;score=base;status={label:base>=80?'合格':'要復習',cls:base>=80?'s-ok':'s-warn'};notes=base>=80?'部分点適用済み':'計算ミス：小数点位置'}
+                        else if(ass.eval==='人力採点'){status={label:i%2?'採点済':'未採点',cls:i%2?'s-ok':'s-warn'};score=i%2?70+(i*3)%25:'-';notes=i%2?'教師コメントあり':'—'}
+                      }
+                      if(ov){ status={label:ov.status,cls:ov.cls}; score=ov.score; notes=ov.notes; }
+
+                      const showManualBtn = (status.label==='認識不可能' || status.label==='要目視' || status.cls==='s-bad');
+                      const hasImage = ass.type==='photo' && i%3!==0; // 1提出=1枚
+                      return (
+                        <tr key={i}>
+                          <td>{name} さん</td>
+                          <td><span className={`status ${status.cls}`}>{status.label}</span></td>
+                          <td>{score}</td>
+                          <td>
+                            <div className="row-split">
+                              <div className="notes">
+                                <div>{notes}</div>
+                                {hasImage && (
+                                  <div className="thumbs" style={{marginTop:8}}>
+                                    <img src="1.png" alt="提出写真"/>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="actions">
+                                <button className="btn" onClick={()=>toast('保護者に送信しました')}>保護者に送信</button>
+                                {hasImage && (
+                                  <button className="btn secondary" onClick={()=>downloadImage('1.png')}>画像をDL</button>
+                                )}
+                                {showManualBtn && (
+                                  <button className="btn" onClick={()=>setManual(ass,i)}>手動で採点</button>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          );})}
+        </div>
+      );
+    }
+
+    // ---- Account Tab ----
+    function Account(){
+      const [name,setName]=useState(()=> localStorage.getItem('teacherName') || '');
+      const save=()=>{localStorage.setItem('teacherName',name);toast('保存しました')};
+      const [tick,setTick]=useState(0);
+      useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1), 1000); return ()=>clearInterval(id)},[]);
+      const workMS = getWorkMS();
+      const hh = String(Math.floor(workMS/3600000)).padStart(2,'0');
+      const mm = String(Math.floor((workMS%3600000)/60000)).padStart(2,'0');
+      const ss = String(Math.floor((workMS%60000)/1000)).padStart(2,'0');
+      return (
+        <section className="panel">
+          <h3 style={{marginTop:0}}>アカウント</h3>
+          <div className="grid" style={{gap:16}}>
+            <div className="field">
+              <label>名前</label>
+              <input className="input" value={name} onChange={e=>setName(e.target.value)} placeholder="例：水野 里紅"/>
+              <div className="row" style={{marginTop:8}}>
+                <button className="btn" onClick={save}>保存</button>
+              </div>
+            </div>
+            <div className="field">
+              <label>今月の作業時間</label>
+              <div className="panel" style={{padding:12}}>{hh}:{mm}:{ss}</div>
+              <small className="muted">※ このページが表示されている時間のみ、30秒ごとに加算します。</small>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
+    function App(){
+      const [tab,setTab]=useState('setup');
+      const [sub,setSub]=useState('photo');
+      const [items,setItems]=useState(()=>{const now=new Date();const plus=m=>new Date(now.getTime()+m*60000).toISOString().slice(0,16);return [
+        {id:UUID(),type:'photo',subject:'理科',title:'理科ノートP32 光の反射',deadline:plus(180),eval:'AI提出確認',createdAt:Date.now()-1000*60*60*2},
+        {id:UUID(),type:'input',subject:'算数',title:'小数の筆算 小テスト',deadline:plus(60*24),eval:'AI採点',createdAt:Date.now()-1000*60*50,problems:[{q:'0.3+0.25=',ans:''},{q:'1.2-0.75=',ans:''},{q:'文章題：りんご0.5個を…',ans:''}]},
+        {id:UUID(),type:'photo',subject:'社会',title:'歴史プリントNo.5 提出写真',deadline:plus(60*12),eval:'人力提出確認',createdAt:Date.now()-1000*60*15},
+      ]});
+
+      useEffect(()=>{
+        const a=document.getElementById('tabBtnSetup');
+        const b=document.getElementById('tabBtnReview');
+        const c=document.getElementById('tabBtnAccount');
+        const onA=()=>setTab('setup');
+        const onB=()=>setTab('review');
+        const onC=()=>setTab('account');
+        a&&a.addEventListener('click',onA); b&&b.addEventListener('click',onB); c&&c.addEventListener('click',onC);
+        return()=>{a&&a.removeEventListener('click',onA);b&&b.removeEventListener('click',onB);c&&c.removeEventListener('click',onC)}
+      },[]);
+      useEffect(()=>{
+        const a=document.getElementById('tabBtnSetup');
+        const b=document.getElementById('tabBtnReview');
+        const c=document.getElementById('tabBtnAccount');
+        if(a) a.setAttribute('aria-selected',String(tab==='setup'));
+        if(b) b.setAttribute('aria-selected',String(tab==='review'));
+        if(c) c.setAttribute('aria-selected',String(tab==='account'));
+      },[tab]);
+
+      const onCreate=(payload)=>{setItems(prev=>[{id:UUID(),createdAt:Date.now(),...payload},...prev]);setTab('review')};
+
+      return (
+        <>
+          {tab==='setup' && (
+            <section className="panel">
+              <div className="row" style={{marginBottom:12}}>
+                <button className="tab-btn" aria-selected={sub==='photo'} onClick={()=>setSub('photo')}>写真課題の設定</button>
+                <button className="tab-btn" aria-selected={sub==='input'} onClick={()=>setSub('input')}>入力課題の設定</button>
+              </div>
+              {sub==='photo'?<PhotoTaskForm onCreate={onCreate}/>:<InputTaskForm onCreate={onCreate}/>}
+            </section>
+          )}
+          {tab==='review' && (
+            <section className="panel">
+              <Review items={items}/>
+            </section>
+          )}
+          {tab==='account' && <Account/>}
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
